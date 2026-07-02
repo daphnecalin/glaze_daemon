@@ -1,9 +1,15 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-import mysql.connector
+from fastapi import FastAPI, UploadFile, File # type: ignore
+from fastapi.middleware.cors import CORSMiddleware # type: ignore
+import mysql.connector # type: ignore
 import zipfile
+import logging
+import sys
 import io
 import json
+
+logger = logging.getLogger('uvicorn.error')
+logger.setLevel(logging.DEBUG)
+logger.debug('this is a debug message test')
 
 app = FastAPI()
 
@@ -53,7 +59,7 @@ def get_or_create_surface_condition_id(cursor, surface_condition_name):
     cursor.execute("INSERT INTO surfacecondition (Name) VALUES (%s)", (surface_condition_name,))
     return cursor.lastrowid
 
-def insert_data(data, image_data_dict):
+def insert_data(data, image_data_dict, board_image_blob, board_info):
     conn = mysql.connector.connect(
         host="host.docker.internal",
         user="ceramadmin",
@@ -62,6 +68,18 @@ def insert_data(data, image_data_dict):
         charset='utf8mb4'
     )
     cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO tileboard (Image, TileCount, Description, CreatedBy)
+        VALUES (%s, %s, %s, %s)
+    """, 
+    (
+       board_image_blob,        
+       board_info.get('tileCount'),        
+       "", # no description yet        
+       "" # no createdby yet
+    ))
+    board_id = cursor.lastrowid
     
     for item in data:
         ann = item.get('annotation', {})
@@ -85,7 +103,7 @@ def insert_data(data, image_data_dict):
             INSERT INTO testpiece (BoardID, Image, Color_L, Color_A, Color_B, GlazeTypeID, FiringTemperature, ChemicalComposition, FiringType, SoilType, SurfaceConditionID)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            1,  # Default BoardID
+            board_id,  # Default BoardID
             image_blob,
             ann.get('ColorL'),
             ann.get('ColorA'),
@@ -110,10 +128,20 @@ async def upload(file: UploadFile = File(...)):
         with zipfile.ZipFile(io.BytesIO(contents)) as z:
             for name in z.namelist():
                 if name.endswith('annotations.json'):
+                    folder = '/'.join(name.split('/')[:-1])
                     annotations_json = z.read(name)
                     annotations = json.loads(annotations_json)
-                    folder = '/'.join(name.split('/')[:-1])
-                    for item in annotations:
+                    board_info = annotations.get('board', {})
+                    tile_annotations = annotations.get('annotations', [])
+                    board_image_blob = None
+                    board_image_name = board_info.get('image')
+                    if board_image_name:
+                        full_board_path = f"{folder}/{board_image_name}" if folder else board_image_name
+                        try:
+                            board_image_blob = z.read(full_board_path)
+                        except KeyError:
+                            print(f"Warning: Board image {full_board_path} not found in zip")
+                    for item in tile_annotations:
                         img_path = item.get('imageUrl')
                         if img_path:
                             full_img_path = f"{folder}/{img_path}" if folder else img_path
@@ -122,7 +150,10 @@ async def upload(file: UploadFile = File(...)):
                             except KeyError:
                                 print(f"Warning: Image file {full_img_path} not found in zip")
                                 image_data_dict[img_path] = None
-                    insert_data(annotations, image_data_dict)
+                    insert_data(tile_annotations, image_data_dict, board_image_blob, board_info)
+        
+        logger.debug('i uploaded data successfully')
         return {"status": "success", "message": "Data uploaded successfully"}
     except Exception as e:
+        logger.debug(f"Upload failed: {str(e)}")
         return {"status": "error", "message": f"Upload failed: {str(e)}"}
