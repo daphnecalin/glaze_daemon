@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS `testpiece` (
 -- Dumping structure for table tilearchive.tileboard
 CREATE TABLE IF NOT EXISTS `tileboard` (
   `ID` int(10) unsigned NOT NULL AUTO_INCREMENT,
-  `Image` mediumtext DEFAULT NULL,
+  `Image` mediumblob DEFAULT NULL,
   `TileCount` int(11) DEFAULT NULL,
   `Description` mediumtext DEFAULT NULL,
   `CreatedBy` varchar(100) DEFAULT NULL,
